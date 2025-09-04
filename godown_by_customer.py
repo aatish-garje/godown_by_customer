@@ -10,9 +10,12 @@ def split_excel_by_customer(uploaded_file):
     # Read file
     df = pd.read_excel(uploaded_file, sheet_name=0, dtype=str)
 
-    # Rename Item Code -> ZFI Part No No
+    # Rename Item Code -> ZFI Part No
     if "Item Code" in df.columns:
-        df = df.rename(columns={"Item Code": "ZFI Part No No"})
+        df = df.rename(columns={"Item Code": "ZFI Part No"})
+
+    if "ZFI Part No" in df.columns:
+        df = df[~df["ZFI Part No"].str.startswith(("C", "c"), na=False)]
 
     # Ensure blank column at index 0 (internal name _blank_col)
     if "_blank_col" not in df.columns:
@@ -22,7 +25,7 @@ def split_excel_by_customer(uploaded_file):
     if "Customer Part No" not in df.columns:
         df.insert(1, "Customer Part No", "")
 
-    required_cols = ["_blank_col", "Customer Part No", "ZFI Part No No", "Item Desc",
+    required_cols = ["_blank_col", "Customer Part No", "ZFI Part No", "Item Desc",
                      "Inv No", "Inv Date", "Qty", "Amount"]
 
     # Keep only required cols + Code for grouping
