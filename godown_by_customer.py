@@ -2,132 +2,159 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 from openpyxl import Workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Font, PatternFill, Border, Side
+from datetime import datetime
 
-# Function to process Excel
-def split_excel_by_customer(uploaded_file):
-    # Read file
+# ---------------- FUNCTION ----------------
+def split_excel_by_customer(uploaded_file, selected_customer):
+    # Read Excel
     df = pd.read_excel(uploaded_file, sheet_name=0, dtype=str)
+
+    # Clean column headers
+    df.columns = df.columns.str.strip()
 
     # Rename Item Code -> ZFI Part No
     if "Item Code" in df.columns:
         df = df.rename(columns={"Item Code": "ZFI Part No"})
 
+    # Remove rows starting with C/c in ZFI Part No
     if "ZFI Part No" in df.columns:
         df = df[~df["ZFI Part No"].str.startswith(("C", "c"), na=False)]
 
-    # Ensure blank column at index 0 (internal name _blank_col)
-    if "_blank_col" not in df.columns:
-        df.insert(0, "_blank_col", "")
-
-    # Ensure Customer Part No exists at index 1
-    if "Customer Part No" not in df.columns:
-        df.insert(1, "Customer Part No", "")
-
-    required_cols = ["_blank_col", "Customer Part No", "ZFI Part No", "Item Desc",
-                     "Inv No", "Inv Date", "Qty", "Amount"]
-
-    # Keep only required cols + Code for grouping
-    available_cols = [c for c in required_cols if c in df.columns]
-    df = df[available_cols + ["Code"]]
-
-    # Convert Qty & Amount to numbers
+    # Convert Qty & Amount to numeric
     if "Qty" in df.columns:
         df["Qty"] = pd.to_numeric(df["Qty"], errors="coerce").fillna(0).astype(float)
     if "Amount" in df.columns:
         df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce").fillna(0).astype(float)
 
-    # Create new workbook
+    # Smart grouping key: Customer Part No if present, else ZFI Part No
+    if "Customer Part No" in df.columns and "ZFI Part No" in df.columns:
+        df["Group Key"] = df["Customer Part No"].fillna("").str.strip()
+        df["Group Key"] = df["Group Key"].mask(df["Group Key"] == "", df["ZFI Part No"])
+    else:
+        df["Group Key"] = df["ZFI Part No"]
+
+    # Clean customer names
+    if "Name" in df.columns:
+        df["Name"] = (
+            df["Name"]
+            .fillna("Unknown Customer")
+            .str.replace(r"\s+", " ", regex=True)
+            .str.strip()
+        )
+
+    # Create workbook
     wb = Workbook()
     wb.remove(wb.active)
 
-    # Define styles
+    # Styles
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill("solid", fgColor="4F81BD")
+    total_fill = PatternFill("solid", fgColor="D9D9D9")
     thin_border = Border(
         left=Side(style="thin"), right=Side(style="thin"),
         top=Side(style="thin"), bottom=Side(style="thin")
     )
 
-    # Create sheets by customer code
-    for code, group in df.groupby("Code"):
-        ws = wb.create_sheet(title=str(code))
+    required_cols = ["Customer Part No", "ZFI Part No", "Item Desc",
+                     "Inv No", "Inv Date", "Qty", "Amount"]
 
-        # Drop Code column for final export
-        group = group[available_cols]
+    # If "All Customers" selected -> process all
+    if selected_customer == "All Customers":
+        customer_groups = df.groupby("Name")
+    else:
+        customer_groups = [(selected_customer, df[df["Name"] == selected_customer])]
 
-        # Write rows
-        rows = list(dataframe_to_rows(group, index=False, header=True))
+    # Create sheet(s)
+    for cust_name, group in customer_groups:
+        ws = wb.create_sheet(title=str(cust_name)[:31])  # sheet name max 31 chars
+        ws.append(required_cols)
 
-        # Make the first header (blank col) actually empty
-        rows[0][0] = None
+        # Header styling
+        for cell in ws[1]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.border = thin_border
 
-        for r_idx, row in enumerate(rows, 1):
-            ws.append(row)
-            for c_idx, cell in enumerate(ws[r_idx], 1):
-                if c_idx == 1:  # Blank column
-                    continue
+        row_idx = 2
 
-                # Formatting per column
-                if r_idx > 1:
-                    if ws.cell(1, c_idx).value == "Customer Part No":
-                        cell.number_format = "@"
-                    elif ws.cell(1, c_idx).value == "Qty":
-                        try:
-                            cell.value = float(cell.value)
-                            cell.number_format = "0"
-                        except:
-                            pass
-                    elif ws.cell(1, c_idx).value == "Amount":
-                        try:
-                            cell.value = float(cell.value)
-                            cell.number_format = "#,##0.00"
-                        except:
-                            pass
+        # Group by smart key
+        for key, part_group in group.groupby("Group Key"):
+            sum_qty = part_group["Qty"].sum()
+            sum_amount = part_group["Amount"].sum()
 
-                # Borders + header styles
+            first_row = True
+            for _, r in part_group.iterrows():
+                ws.append([
+                    r.get("Customer Part No", "") if first_row else "",
+                    r.get("ZFI Part No", "") if first_row else "",
+                    r.get("Item Desc", ""),
+                    r.get("Inv No", ""),
+                    r.get("Inv Date", ""),
+                    r.get("Qty", 0),
+                    r.get("Amount", 0)
+                ])
+                first_row = False
+                row_idx += 1
+
+            # Add subtotal row for the group
+            ws.append([f"{key} Total", "", "", "", "", sum_qty, sum_amount])
+            for cell in ws[row_idx]:
+                cell.font = Font(bold=True)
+                cell.fill = total_fill
                 cell.border = thin_border
-                if r_idx == 1 and c_idx > 1:  # Header row (except blank col)
-                    cell.font = header_font
-                    cell.fill = header_fill
+            row_idx += 1
 
         # Auto-adjust column widths
         for col in ws.columns:
-            col_letter = col[0].column_letter
-            if col_letter == "A":  # Blank column default width
-                ws.column_dimensions[col_letter].width = 3
-                continue
             max_length = 0
+            col_letter = col[0].column_letter
             for cell in col:
-                try:
-                    if cell.value is not None:
-                        max_length = max(max_length, len(str(cell.value)))
-                except:
-                    pass
+                if cell.value is not None:
+                    max_length = max(max_length, len(str(cell.value)))
             ws.column_dimensions[col_letter].width = max_length + 2
 
-    # Save to BytesIO
+    # Save workbook to BytesIO
     output = BytesIO()
     wb.save(output)
     output.seek(0)
+
     return output
 
-
 # ---------------- STREAMLIT APP ----------------
-st.title("📊 Split Excel by Customer Code")
+st.title("📊 Split Excel by Customer Name with Subtotals")
 
 uploaded_file = st.file_uploader("Upload your Excel file", type=["xlsx"])
 
 if uploaded_file:
-    st.success("✅ File uploaded successfully!")
+    # Preview available customers
+    df_preview = pd.read_excel(uploaded_file, sheet_name=0, dtype=str)
+    df_preview.columns = df_preview.columns.str.strip()
 
-    if st.button("Process File"):
-        processed_file = split_excel_by_customer(uploaded_file)
-
-        st.download_button(
-            label="📥 Download Formatted Excel",
-            data=processed_file,
-            file_name="Split_By_Customer_Formatted.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if "Name" in df_preview.columns:
+        df_preview["Name"] = (
+            df_preview["Name"]
+            .fillna("Unknown Customer")
+            .str.replace(r"\s+", " ", regex=True)
+            .str.strip()
         )
+        customer_list = sorted(df_preview["Name"].unique().tolist())
+        customer_list.insert(0, "All Customers")  # add option at top
+
+        selected_customer = st.selectbox("Select Customer", customer_list)
+
+        if st.button("Process File"):
+            processed_file = split_excel_by_customer(uploaded_file, selected_customer)
+
+            # Build dynamic file name
+            today_str = datetime.today().strftime("%d.%m.%Y")
+            download_filename = f"{selected_customer} godown stock dt {today_str}.xlsx"
+
+            st.download_button(
+                label="📥 Download Formatted Excel",
+                data=processed_file,
+                file_name=download_filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+    else:
+        st.error("❌ 'Name' column (Customer Name) not found in Excel file!")
