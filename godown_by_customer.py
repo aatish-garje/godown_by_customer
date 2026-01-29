@@ -88,12 +88,15 @@ def split_excel_by_customer(uploaded_file, selected_customer):
                 ws.append([
                     r.get("Customer Part No", "") if first_row else "",
                     r.get("ZFI Part No", "") if first_row else "",
-                    r.get("Item Desc", ""),
+                    r.get("Item Desc", "") if first_row else "",
                     r.get("Inv No", ""),
                     r.get("Inv Date", ""),
                     r.get("Qty", 0),
                     r.get("Amount", 0)
                 ])
+                for cell in ws[row_idx]:
+                    cell.border = thin_border
+                    
                 first_row = False
                 row_idx += 1
 
@@ -158,3 +161,4 @@ if uploaded_file:
             )
     else:
         st.error("❌ 'Name' column (Customer Name) not found in Excel file!")
+
