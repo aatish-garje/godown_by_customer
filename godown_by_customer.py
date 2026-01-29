@@ -76,6 +76,8 @@ def split_excel_by_customer(uploaded_file, selected_customer):
             cell.fill = header_fill
             cell.border = thin_border
 
+        ws.freeze_panes = "A2"
+
         row_idx = 2
 
         # Group by smart key
@@ -161,4 +163,5 @@ if uploaded_file:
             )
     else:
         st.error("❌ 'Name' column (Customer Name) not found in Excel file!")
+
 
